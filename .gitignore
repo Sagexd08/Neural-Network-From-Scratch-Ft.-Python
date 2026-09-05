@@ -8,3 +8,7 @@ venv/
 .qodo/
 .DS_Store
 *.tmp
+
+# Scratch checkpoints from ad-hoc runs; examples regenerate what they need.
+scratch_nn/models/rt.json
+scratch_nn/models/synth.json
