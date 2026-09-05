@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "scratch-nn"
+version = "1.0.0"
+description = "A neural network framework built from scratch with Python's standard library alone - no NumPy, no PyTorch, no autodiff."
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+keywords = [
+    "neural-network", "machine-learning", "deep-learning", "backpropagation",
+    "education", "from-scratch", "no-dependencies", "gradient-descent",
+]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Education",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Education",
+]
+
+# Intentionally empty. The entire point of this project is that the
+# mathematics is implemented by hand on Python primitives.
+dependencies = []
+
+[project.scripts]
+scratch-nn = "scratch_nn.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-dir]
+"" = "src"

@@ -1,0 +1,14 @@
+# This project has ZERO dependencies. That is the point.
+#
+# Everything - the tensor engine, autodiff-free backpropagation, the
+# optimizers, the plotting - is built on Python's standard library:
+#
+#   math, random, csv, json, os, time, typing, dataclasses,
+#   collections, argparse, unittest
+#
+# Requires Python 3.8 or newer (for the typing syntax used).
+#
+# To run:
+#     python -m scratch_nn xor
+#
+# There is deliberately nothing to install.
