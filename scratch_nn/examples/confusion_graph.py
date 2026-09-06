@@ -9,17 +9,19 @@ most.  On a dataset that is 99% class 0, a model that always answers 0 scores
 imperfect three-class model and then looks at *where* it is wrong, which is the
 question accuracy cannot answer.
 
-It produces three views of the same result:
+It produces four views of the same result:
 
-1. the confusion matrix as a text grid   - exact, good for a terminal
-2. the confusion matrix as an SVG heatmap - scannable, good for a report
-3. precision / recall / F1 per class      - the numbers behind the picture
+1. the confusion matrix as a text grid    - exact, good for a terminal
+2. per-class precision / recall / F1      - the numbers behind the picture
+3. the confusion matrix as an SVG heatmap - scannable, good for a report
+4. those same scores as an SVG scorecard  - the figure for a README
 
 The SVG is written by string formatting, with no plotting library, which is why
 this file still runs with an empty requirements.txt.
 
-It also regenerates ``reports/confusion_matrix.svg``, the image embedded in
-README.md, so that figure is reproducible rather than a mystery artifact.
+It also regenerates the figures embedded in the READMEs -
+``reports/confusion_matrix.svg`` and ``reports/classification_report.svg`` -
+so those images are reproducible rather than mystery artifacts.
 """
 
 import os
@@ -30,8 +32,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 import scratch_nn as nn
 
 
-REPORT_PATH = os.path.join(os.path.dirname(__file__), "..", "reports",
-                           "confusion_matrix.svg")
+REPORTS_DIR = os.path.join(os.path.dirname(__file__), "..", "reports")
+MATRIX_PATH = os.path.join(REPORTS_DIR, "confusion_matrix.svg")
+SCORES_PATH = os.path.join(REPORTS_DIR, "classification_report.svg")
 CLASS_NAMES = ["class A", "class B", "class C"]
 
 
@@ -91,12 +94,18 @@ def main() -> int:
     print()
 
     # 3. the confusion graph ------------------------------------------------
-    path = nn.save_confusion_matrix_svg(
-        matrix, REPORT_PATH, class_names=CLASS_NAMES,
+    graph = nn.save_confusion_matrix_svg(
+        matrix, MATRIX_PATH, class_names=CLASS_NAMES,
         title="Confusion matrix - 3-class blobs (test set)")
-    print(f"confusion graph written to {os.path.normpath(path)}")
+    print(f"confusion graph written to {os.path.normpath(graph)}")
     print("open it in a browser: green = correct, red = misclassified, "
           "intensity = share of that true class.")
+
+    # 4. the same scores as a figure ----------------------------------------
+    scores = nn.save_classification_report_svg(
+        predictions, y_test, SCORES_PATH, class_names=CLASS_NAMES,
+        title="Precision / recall / F1 per class")
+    print(f"scorecard written to      {os.path.normpath(scores)}")
     return 0
 
 

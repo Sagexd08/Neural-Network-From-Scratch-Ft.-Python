@@ -50,10 +50,12 @@ from .layers import Activation_, BatchNorm, Dense, Dropout, Flatten, Layer, Resi
 from .losses import (LOSSES, BinaryCrossEntropy, CategoricalCrossEntropy, Huber,
                      Loss, MeanAbsoluteError, MeanSquaredError, get_loss)
 from .metrics import (accuracy, classification_report, confusion_matrix,
+                      classification_report_svg,
                       confusion_matrix_svg, f1_score,
                       format_confusion_matrix, mean_absolute_error,
                       mean_squared_error, precision, r_squared, recall,
                       regression_report, root_mean_squared_error,
+                      save_classification_report_svg,
                       save_confusion_matrix_svg)
 from .model import Model, Sequential
 from .numerical import (GradientCheckResult, check_gradients,
@@ -105,7 +107,9 @@ __all__ = [
     # metrics
     "accuracy", "confusion_matrix", "precision", "recall", "f1_score",
     "classification_report", "format_confusion_matrix",
-    "confusion_matrix_svg", "save_confusion_matrix_svg", "mean_absolute_error",
+    "confusion_matrix_svg", "save_confusion_matrix_svg",
+    "classification_report_svg", "save_classification_report_svg",
+    "mean_absolute_error",
     "mean_squared_error", "root_mean_squared_error", "r_squared",
     "regression_report",
     # gradient checking

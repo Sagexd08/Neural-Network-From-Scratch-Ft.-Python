@@ -83,7 +83,7 @@ pip install -e .      # only wires up the import path; still pulls in no depende
 python -m scratch_nn xor              # train a network on XOR
 python -m scratch_nn demo             # one sample, every intermediate value
 python -m scratch_nn gradient-check   # prove backpropagation is correct
-python -m scratch_nn test             # run the 306-test suite
+python -m scratch_nn test             # run the 315-test suite
 
 python examples/xor.py                     # XOR, with a decision-boundary plot
 python examples/binary_classification.py   # the full CSV pipeline
@@ -126,8 +126,8 @@ scratch_nn/
 │   └── __main__.py         CLI
 ├── examples/               xor.py, binary_classification.py, multiclass_classification.py,
 │                          confusion_graph.py
-├── reports/                generated confusion-matrix graphs
-├── tests/                  306 unit tests
+├── reports/                generated confusion graph and scorecard
+├── tests/                  315 unit tests
 └── models/                 saved checkpoints
 ```
 
@@ -1171,6 +1171,17 @@ macro avg     0.7619  0.7611  0.7602      180
 accuracy                      0.7611      180
 ```
 
+`classification_report_svg` renders the same numbers as a figure, with a
+proportional bar behind each F1 so the comparison between classes is a length
+rather than four decimal places to read digit by digit:
+
+```python
+nn.save_classification_report_svg(preds, y_test, "reports/report.svg",
+                                  class_names=["class A", "class B", "class C"])
+```
+
+![Per-class precision, recall and F1](reports/classification_report.svg)
+
 Macro-averaging weights every class equally regardless of how many examples it
 has, so a rare class cannot be ignored — exactly the blind spot that plain
 accuracy has.
@@ -1370,6 +1381,8 @@ classification_report / mean_absolute_error / root_mean_squared_error / r_square
 format_confusion_matrix(matrix, class_names=None)          -> text grid
 confusion_matrix_svg(matrix, class_names=None, ...)        -> SVG string
 save_confusion_matrix_svg(matrix, path, class_names=None)  -> writes .svg
+classification_report_svg(y_pred, y_true, class_names=None) -> SVG string
+save_classification_report_svg(y_pred, y_true, path, ...)   -> writes .svg
 
 # Saving
 model.save("m.json")          / Sequential.load("m.json")          # recommended
@@ -1391,7 +1404,7 @@ python -m scratch_nn test
 PYTHONPATH=src python -m unittest discover -s tests -t .
 ```
 
-**306 tests, all passing, in under 2 seconds.**
+**315 tests, all passing, in under 3 seconds.**
 
 | File | Covers |
 |---|---|
@@ -1459,7 +1472,7 @@ training · L1, L2, dropout regularization · Early stopping with best-weight
 restore · Model checkpointing · LR schedules · CSV pipeline with leak-free
 preprocessing · Accuracy, precision, recall, F1, confusion matrix, R² ·
 Human-readable JSON serialization · Gradient clipping and NaN guards · CLI ·
-306 unit tests · **XOR solved** · Zero dependencies.
+315 unit tests · **XOR solved** · Zero dependencies.
 
 ## License
 

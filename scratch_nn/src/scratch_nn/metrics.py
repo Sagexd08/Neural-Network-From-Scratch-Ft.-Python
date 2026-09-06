@@ -50,6 +50,8 @@ __all__ = [
     "format_confusion_matrix",
     "confusion_matrix_svg",
     "save_confusion_matrix_svg",
+    "classification_report_svg",
+    "save_classification_report_svg",
     "mean_absolute_error",
     "mean_squared_error",
     "root_mean_squared_error",
@@ -467,6 +469,165 @@ def save_confusion_matrix_svg(matrix: List[List[int]], path: str,
     ...                           class_names=["setosa", "versicolor"])
     """
     svg = confusion_matrix_svg(matrix, class_names=class_names, **kwargs)
+    parent = os.path.dirname(os.path.abspath(path))
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(svg)
+    return path
+
+
+# ---------------------------------------------------------------------------
+# the scorecard: precision / recall / F1 as a figure
+# ---------------------------------------------------------------------------
+#
+# ``classification_report`` prints the same numbers as an aligned text table,
+# which is the right output for a terminal.  This renders them as SVG for the
+# cases where the audience is a README or a report rather than a shell.
+#
+# Each F1 cell carries a proportional bar behind the number.  A table of four-
+# decimal figures all beginning "0.7" is read digit by digit; the bar turns the
+# comparison between classes into a length, which is read at a glance.  The bar
+# is drawn behind the text rather than beside it so the exact value stays
+# visible - the picture is an aid to the number, not a replacement for it.
+
+def classification_report_svg(y_pred: Predictions, y_true: Predictions,
+                              class_names: Optional[Sequence[str]] = None,
+                              title: str = "Classification report",
+                              threshold: float = 0.5,
+                              row_height: int = 34) -> str:
+    """Render per-class precision / recall / F1 as an SVG table.
+
+    The figure counterpart of :func:`classification_report`, showing the same
+    numbers with a proportional bar behind each F1 score.
+
+    >>> svg = classification_report_svg(predictions, y_test,
+    ...                                 class_names=["cat", "dog"])
+    """
+    matrix = confusion_matrix(y_pred, y_true, threshold=threshold)
+    n = len(matrix)
+    names = ([str(c) for c in class_names] if class_names
+             else [f"class {i}" for i in range(n)])
+    if len(names) < n:
+        names = names + [f"class {i}" for i in range(len(names), n)]
+
+    # Per-class precision / recall / F1 / support, and the macro averages.
+    rows = []
+    macro_p = macro_r = macro_f = 0.0
+    total_support = 0
+    for c in range(n):
+        tp, fp, fn, _ = _per_class_counts(matrix, c)
+        support = tp + fn
+        total_support += support
+        pr = safe_div(tp, tp + fp) if (tp + fp) else 0.0
+        rc = safe_div(tp, tp + fn) if (tp + fn) else 0.0
+        f1 = 2 * pr * rc / (pr + rc) if (pr + rc) else 0.0
+        macro_p += pr
+        macro_r += rc
+        macro_f += f1
+        rows.append((names[c], pr, rc, f1, support))
+    macro_p, macro_r, macro_f = macro_p / n, macro_r / n, macro_f / n
+    correct = sum(matrix[i][i] for i in range(n))
+    acc = safe_div(correct, total_support) if total_support else 0.0
+
+    pad = 24
+    title_h = 44 if title else 10
+    head_h = 30
+    name_w = max(110, 9 * max(len(x) for x in names[:n]) + 26)
+    col_w = 104
+    n_cols = 4                                   # precision, recall, F1, support
+    width = pad * 2 + name_w + col_w * n_cols
+    if title:
+        width = max(width, int(len(title) * 18 * 0.55) + pad * 2)
+    # rows + a separator + macro avg + accuracy
+    body_h = row_height * (n + 2) + 14
+    height = pad * 2 + title_h + head_h + body_h
+
+    x0 = pad
+    y0 = pad + title_h + head_h
+
+    out: List[str] = []
+    out.append(
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" '
+        f'height="{height}" viewBox="0 0 {width} {height}" '
+        f'font-family="Segoe UI, Helvetica, Arial, sans-serif">'
+    )
+    out.append(f'<rect width="{width}" height="{height}" fill="#ffffff"/>')
+    if title:
+        out.append(
+            f'<text x="{pad}" y="{pad + 22}" font-size="18" font-weight="600" '
+            f'fill="#1a1a1a">{_svg_escape(title)}</text>'
+        )
+
+    headers = ["precision", "recall", "f1", "support"]
+    for i, h in enumerate(headers):
+        cx = x0 + name_w + col_w * i + col_w - 12
+        out.append(
+            f'<text x="{cx}" y="{y0 - 10}" font-size="12" font-weight="600" '
+            f'fill="#666" text-anchor="end">{h}</text>'
+        )
+    out.append(f'<line x1="{x0}" y1="{y0 - 3}" x2="{width - pad}" y2="{y0 - 3}" '
+               f'stroke="#d0d0d0" stroke-width="1"/>')
+
+    def value_cell(col: int, y: int, text: str, bar: Optional[float] = None,
+                   bold: bool = False) -> None:
+        cx = x0 + name_w + col_w * col
+        if bar is not None:
+            # Proportional bar behind the number: length is the score.
+            bar_w = max(0.0, min(1.0, bar)) * (col_w - 24)
+            out.append(
+                f'<rect x="{cx + 12}" y="{y - 14}" width="{bar_w:.1f}" '
+                f'height="20" rx="3" fill="{_blend(_SVG_CORRECT, 0.22)}"/>'
+            )
+        weight = ' font-weight="600"' if bold else ""
+        out.append(
+            f'<text x="{cx + col_w - 12}" y="{y}" font-size="13"{weight} '
+            f'fill="#1a1a1a" text-anchor="end">{_svg_escape(text)}</text>'
+        )
+
+    y = y0 + row_height - 10
+    for i, (name, pr, rc, f1, support) in enumerate(rows):
+        if i % 2 == 0:
+            out.append(f'<rect x="{x0}" y="{y - 21}" width="{width - pad * 2}" '
+                       f'height="{row_height}" fill="#fafafa"/>')
+        out.append(
+            f'<text x="{x0 + 10}" y="{y}" font-size="13" fill="#1a1a1a">'
+            f'{_svg_escape(name)}</text>'
+        )
+        value_cell(0, y, f"{pr:.4f}")
+        value_cell(1, y, f"{rc:.4f}")
+        value_cell(2, y, f"{f1:.4f}", bar=f1)
+        value_cell(3, y, str(support))
+        y += row_height
+
+    out.append(f'<line x1="{x0}" y1="{y - 21}" x2="{width - pad}" y2="{y - 21}" '
+               f'stroke="#d0d0d0" stroke-width="1"/>')
+    y += 8
+
+    out.append(f'<text x="{x0 + 10}" y="{y}" font-size="13" font-weight="600" '
+               f'fill="#1a1a1a">macro avg</text>')
+    value_cell(0, y, f"{macro_p:.4f}", bold=True)
+    value_cell(1, y, f"{macro_r:.4f}", bold=True)
+    value_cell(2, y, f"{macro_f:.4f}", bar=macro_f, bold=True)
+    value_cell(3, y, str(total_support), bold=True)
+    y += row_height
+
+    out.append(f'<text x="{x0 + 10}" y="{y}" font-size="13" font-weight="600" '
+               f'fill="#1a1a1a">accuracy</text>')
+    value_cell(2, y, f"{acc:.4f}", bar=acc, bold=True)
+    value_cell(3, y, str(total_support), bold=True)
+
+    out.append("</svg>")
+    return "\n".join(out)
+
+
+def save_classification_report_svg(y_pred: Predictions, y_true: Predictions,
+                                   path: str,
+                                   class_names: Optional[Sequence[str]] = None,
+                                   **kwargs) -> str:
+    """Write :func:`classification_report_svg` output to ``path``."""
+    svg = classification_report_svg(y_pred, y_true, class_names=class_names,
+                                    **kwargs)
     parent = os.path.dirname(os.path.abspath(path))
     if parent:
         os.makedirs(parent, exist_ok=True)

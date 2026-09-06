@@ -16,9 +16,11 @@ from scratch_nn.data import (LabelEncoder, MinMaxScaler, StandardScaler,
 from scratch_nn.layers import Dense, Dropout
 from scratch_nn.losses import MeanSquaredError
 from scratch_nn.metrics import (accuracy, classification_report,
+                                classification_report_svg,
                                 confusion_matrix, confusion_matrix_svg,
                                 f1_score, mean_absolute_error, precision,
                                 r_squared, recall, root_mean_squared_error,
+                                save_classification_report_svg,
                                 save_confusion_matrix_svg)
 from scratch_nn.model import Sequential
 from scratch_nn.optimizers import (SGD, AdaGrad, Adam, Momentum, RMSProp,
@@ -999,6 +1001,90 @@ class TestPickleSerialization(unittest.TestCase):
             save_pickle(model, path, metadata={"note": "xor"})
             _, extras = load_pickle(path, with_extras=True)
         self.assertEqual(extras["metadata"]["note"], "xor")
+
+
+class TestClassificationReportSVG(unittest.TestCase):
+    """The scorecard figure: precision / recall / F1 as SVG."""
+
+    Y_PRED = [2, 0, 1, 2, 0, 1, 1, 2, 0, 0]
+    Y_TRUE = [2, 0, 1, 1, 0, 1, 2, 2, 0, 1]
+    NAMES = ["a", "b", "c"]
+
+    def test_output_is_well_formed_xml(self):
+        svg = classification_report_svg(self.Y_PRED, self.Y_TRUE, self.NAMES)
+        xml.dom.minidom.parseString(svg)
+        self.assertTrue(svg.startswith("<svg"))
+        self.assertTrue(svg.rstrip().endswith("</svg>"))
+
+    def test_values_match_the_metric_functions(self):
+        # The figure must never drift from the numbers it claims to show.
+        svg = classification_report_svg(self.Y_PRED, self.Y_TRUE, self.NAMES)
+        for c in range(len(self.NAMES)):
+            for fn in (precision, recall, f1_score):
+                value = f"{fn(self.Y_PRED, self.Y_TRUE, c):.4f}"
+                self.assertIn(f">{value}</text>", svg)
+
+    def test_macro_average_and_accuracy_are_shown(self):
+        svg = classification_report_svg(self.Y_PRED, self.Y_TRUE, self.NAMES)
+        macro = f1_score(self.Y_PRED, self.Y_TRUE, average="macro")
+        self.assertIn(f">{macro:.4f}</text>", svg)
+        self.assertIn(f">{accuracy(self.Y_PRED, self.Y_TRUE):.4f}</text>", svg)
+        self.assertIn("macro avg", svg)
+        self.assertIn("accuracy", svg)
+
+    def test_agrees_with_the_text_report(self):
+        svg = classification_report_svg(self.Y_PRED, self.Y_TRUE, self.NAMES)
+        text = classification_report(self.Y_PRED, self.Y_TRUE, self.NAMES)
+        for line in text.splitlines():
+            for token in line.split():
+                if token.replace(".", "").isdigit() and "." in token:
+                    self.assertIn(f">{token}</text>", svg)
+
+    def test_class_names_are_xml_escaped(self):
+        svg = classification_report_svg([1, 0], [1, 0],
+                                        class_names=["<b>", "x&y"])
+        xml.dom.minidom.parseString(svg)
+        self.assertIn("&lt;b&gt;", svg)
+        self.assertNotIn("<b>", svg)
+
+    def test_nothing_is_drawn_outside_the_canvas(self):
+        svg = classification_report_svg(self.Y_PRED, self.Y_TRUE, self.NAMES)
+        root = xml.dom.minidom.parseString(svg).documentElement
+        width = int(root.getAttribute("width"))
+        height = int(root.getAttribute("height"))
+        for rect in root.getElementsByTagName("rect"):
+            x = float(rect.getAttribute("x") or 0)
+            y = float(rect.getAttribute("y") or 0)
+            self.assertLessEqual(x + float(rect.getAttribute("width")), width + 0.5)
+            self.assertLessEqual(y + float(rect.getAttribute("height")), height + 0.5)
+        for text in root.getElementsByTagName("text"):
+            self.assertLessEqual(float(text.getAttribute("x")), width)
+            self.assertLessEqual(float(text.getAttribute("y")), height)
+
+    def test_long_title_widens_the_canvas(self):
+        # A title longer than the table must not be clipped.
+        title = "A considerably longer report title than the table itself is"
+        root = xml.dom.minidom.parseString(
+            classification_report_svg(self.Y_PRED, self.Y_TRUE, self.NAMES,
+                                      title=title)).documentElement
+        plain = xml.dom.minidom.parseString(
+            classification_report_svg(self.Y_PRED, self.Y_TRUE,
+                                      self.NAMES)).documentElement
+        self.assertGreater(int(root.getAttribute("width")),
+                           int(plain.getAttribute("width")))
+
+    def test_binary_problem_renders(self):
+        svg = classification_report_svg([1, 0, 1, 0], [1, 0, 0, 0])
+        xml.dom.minidom.parseString(svg)
+
+    def test_save_writes_a_file_and_creates_directories(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "figures", "report.svg")
+            returned = save_classification_report_svg(
+                self.Y_PRED, self.Y_TRUE, path, class_names=self.NAMES)
+            self.assertEqual(returned, path)
+            with open(path, encoding="utf-8") as fh:
+                xml.dom.minidom.parseString(fh.read())
 
 
 if __name__ == "__main__":
