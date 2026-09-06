@@ -12,7 +12,7 @@ cd scratch_nn
 python -m scratch_nn xor              # trains a network on XOR -> 4/4
 python -m scratch_nn demo             # one sample, every intermediate value
 python -m scratch_nn gradient-check   # proves backpropagation is correct
-python -m scratch_nn test             # 281 tests
+python -m scratch_nn test             # 306 tests
 ```
 
 **Full documentation, including the mathematics from first principles, is in
@@ -29,7 +29,8 @@ python -m scratch_nn test             # 281 tests
 | Optimizers | SGD, Momentum, Nesterov, Adam, AMSGrad, RMSProp, AdaGrad |
 | Training | mini-batch, early stopping, checkpointing, LR schedules, clipping |
 | Data | CSV loading, leak-free scaling, one-hot encoding, stratified splits |
-| Metrics | accuracy, precision, recall, F1, confusion matrix, MAE/RMSE/R² |
-| Verification | finite-difference gradient checking; 281 unit tests |
+| Checkpoints | readable JSON, plus `.pkl` export; bit-for-bit round-trip |
+| Metrics | accuracy, precision, recall, F1, confusion matrix + SVG confusion graph, MAE/RMSE/R² |
+| Verification | finite-difference gradient checking; 306 unit tests |
 
 Requires Python 3.8+. `requirements.txt` is deliberately empty.

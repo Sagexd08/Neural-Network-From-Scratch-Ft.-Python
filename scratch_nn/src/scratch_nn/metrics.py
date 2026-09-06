@@ -33,10 +33,11 @@ is 0.0, which is the honest answer.
 from __future__ import annotations
 
 import math
+import os
 from typing import Dict, List, Optional, Sequence, Tuple, Union
 
 from .tensor import Tensor
-from .utils import format_table, safe_div
+from .utils import clamp, format_table, safe_div
 
 __all__ = [
     "to_labels",
@@ -47,6 +48,8 @@ __all__ = [
     "f1_score",
     "classification_report",
     "format_confusion_matrix",
+    "confusion_matrix_svg",
+    "save_confusion_matrix_svg",
     "mean_absolute_error",
     "mean_squared_error",
     "root_mean_squared_error",
@@ -271,6 +274,205 @@ def format_confusion_matrix(matrix: List[List[int]],
         lines += ["", f"true negatives  {tn:>6}    false positives {fp:>6}",
                   f"false negatives {fn:>6}    true positives  {tp:>6}"]
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# the confusion graph
+# ---------------------------------------------------------------------------
+#
+# The text grid above is exact but hard to *scan*: with more than a few classes
+# the eye cannot tell 118 from 11 at a glance.  A heatmap fixes that by mapping
+# count -> colour, so the structure of the errors is visible immediately: a
+# strong diagonal means a good model, and a bright off-diagonal cell names the
+# specific pair of classes being confused.
+#
+# We emit SVG rather than call a plotting library because this project has no
+# dependencies.  SVG is just text, so a few hundred characters of string
+# formatting produce a real vector image that any browser, editor, or README
+# can display - and, like the JSON checkpoints, it stays inspectable.
+#
+# Colour scale
+# ------------
+# Cell intensity is normalised *per row* rather than globally.  Rows are the
+# actual classes, so row-normalising asks "of the true class-i examples, where
+# did they go?" - which is recall, the question a confusion matrix exists to
+# answer.  Under global normalisation a large class saturates every colour and
+# a rare class stays invisible however badly it is classified.
+#
+# Diagonal (correct) cells are shaded green and off-diagonal (error) cells red,
+# so correctness reads as hue and magnitude as intensity.  Text flips to white
+# on dark cells to stay legible.
+
+_SVG_CORRECT = (16, 122, 74)     # green: the diagonal
+_SVG_ERROR = (190, 52, 42)       # red:   everything off it
+
+
+def _svg_escape(text: str) -> str:
+    """Escape the five XML metacharacters so class names cannot break the SVG."""
+    return (str(text).replace("&", "&amp;").replace("<", "&lt;")
+            .replace(">", "&gt;").replace('"', "&quot;").replace("'", "&apos;"))
+
+
+def _blend(rgb: Tuple[int, int, int], intensity: float) -> str:
+    """Mix a colour toward white; ``intensity`` 0 -> white, 1 -> full colour."""
+    t = clamp(intensity, 0.0, 1.0)
+    r, g, b = (round(255 + (channel - 255) * t) for channel in rgb)
+    return f"#{r:02x}{g:02x}{b:02x}"
+
+
+def confusion_matrix_svg(matrix: List[List[int]],
+                         class_names: Optional[Sequence[str]] = None,
+                         title: str = "Confusion matrix",
+                         cell_size: int = 64,
+                         normalize: bool = True) -> str:
+    """Render a confusion matrix as a standalone SVG heatmap.
+
+    Returns the SVG document as a string; :func:`save_confusion_matrix_svg`
+    writes it to a file.
+
+    >>> cm = confusion_matrix(predictions, y_test)
+    >>> svg = confusion_matrix_svg(cm, class_names=["cat", "dog"])
+
+    With ``normalize=True`` each cell also shows the row percentage, so a row
+    reads as "of the true class-i examples, this is where they went".  Set it
+    to ``False`` to show raw counts only.
+    """
+    n = len(matrix)
+    if n == 0 or any(len(row) != n for row in matrix):
+        raise ValueError("confusion matrix must be square and non-empty")
+
+    names = ([str(c) for c in class_names] if class_names
+             else [str(i) for i in range(n)])
+    if len(names) < n:
+        names = names + [str(i) for i in range(len(names), n)]
+
+    # Layout: a label gutter on the left and top, the grid, then a legend.
+    pad = 24
+    label_w = max(90, 9 * max(len(x) for x in names[:n]) + 30)
+    label_h = 54
+    title_h = 40 if title else 8
+    grid = n * cell_size
+    # The title sits above the grid but is not constrained by it, so a long
+    # title must be allowed to widen the canvas or it would be clipped.
+    # 0.55em per character is a safe average for this font size.
+    title_w = int(len(title) * 18 * 0.55) + pad * 2 if title else 0
+    width = max(pad * 2 + label_w + grid, title_w)
+    height = pad * 2 + title_h + label_h + grid + 54
+
+    x0 = pad + label_w
+    y0 = pad + title_h + label_h
+
+    out: List[str] = []
+    out.append(
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" '
+        f'height="{height}" viewBox="0 0 {width} {height}" '
+        f'font-family="Segoe UI, Helvetica, Arial, sans-serif">'
+    )
+    out.append(f'<rect width="{width}" height="{height}" fill="#ffffff"/>')
+
+    if title:
+        out.append(
+            f'<text x="{pad}" y="{pad + 20}" font-size="18" font-weight="600" '
+            f'fill="#1a1a1a">{_svg_escape(title)}</text>'
+        )
+
+    # Axis titles.
+    out.append(
+        f'<text x="{x0 + grid / 2:.1f}" y="{y0 - 32}" font-size="13" '
+        f'font-weight="600" fill="#444" text-anchor="middle">predicted</text>'
+    )
+    out.append(
+        f'<text x="{pad + 14}" y="{y0 + grid / 2:.1f}" font-size="13" '
+        f'font-weight="600" fill="#444" text-anchor="middle" '
+        f'transform="rotate(-90 {pad + 14} {y0 + grid / 2:.1f})">actual</text>'
+    )
+
+    # Column headers.
+    for c in range(n):
+        cx = x0 + c * cell_size + cell_size / 2
+        out.append(
+            f'<text x="{cx:.1f}" y="{y0 - 12}" font-size="12" fill="#333" '
+            f'text-anchor="middle">{_svg_escape(names[c])}</text>'
+        )
+
+    # Row headers and cells.
+    for r in range(n):
+        row_total = sum(matrix[r])
+        cy_label = y0 + r * cell_size + cell_size / 2 + 4
+        out.append(
+            f'<text x="{x0 - 12}" y="{cy_label:.1f}" font-size="12" fill="#333" '
+            f'text-anchor="end">{_svg_escape(names[r])}</text>'
+        )
+
+        for c in range(n):
+            count = matrix[r][c]
+            # Row-normalised intensity: fraction of this true class.
+            fraction = safe_div(count, row_total) if row_total else 0.0
+            base = _SVG_CORRECT if r == c else _SVG_ERROR
+            fill = _blend(base, fraction)
+            x = x0 + c * cell_size
+            y = y0 + r * cell_size
+            out.append(
+                f'<rect x="{x}" y="{y}" width="{cell_size}" height="{cell_size}" '
+                f'fill="{fill}" stroke="#ffffff" stroke-width="2"/>'
+            )
+            # Dark cells need light text to stay readable.
+            text_fill = "#ffffff" if fraction > 0.55 else "#1a1a1a"
+            cx = x + cell_size / 2
+            if normalize and row_total:
+                out.append(
+                    f'<text x="{cx:.1f}" y="{y + cell_size / 2 - 2:.1f}" '
+                    f'font-size="15" font-weight="600" fill="{text_fill}" '
+                    f'text-anchor="middle">{count}</text>'
+                )
+                out.append(
+                    f'<text x="{cx:.1f}" y="{y + cell_size / 2 + 15:.1f}" '
+                    f'font-size="11" fill="{text_fill}" opacity="0.85" '
+                    f'text-anchor="middle">{fraction * 100:.0f}%</text>'
+                )
+            else:
+                out.append(
+                    f'<text x="{cx:.1f}" y="{y + cell_size / 2 + 6:.1f}" '
+                    f'font-size="15" font-weight="600" fill="{text_fill}" '
+                    f'text-anchor="middle">{count}</text>'
+                )
+
+    # Legend: what the two hues mean, plus overall accuracy.
+    total = sum(sum(row) for row in matrix)
+    correct = sum(matrix[i][i] for i in range(n))
+    ly = y0 + grid + 30
+    out.append(f'<rect x="{x0}" y="{ly - 11}" width="13" height="13" '
+               f'fill="{_blend(_SVG_CORRECT, 0.85)}"/>')
+    out.append(f'<text x="{x0 + 19}" y="{ly}" font-size="12" fill="#444">'
+               f'correct</text>')
+    out.append(f'<rect x="{x0 + 88}" y="{ly - 11}" width="13" height="13" '
+               f'fill="{_blend(_SVG_ERROR, 0.85)}"/>')
+    out.append(f'<text x="{x0 + 107}" y="{ly}" font-size="12" fill="#444">'
+               f'misclassified</text>')
+    out.append(
+        f'<text x="{x0 + grid}" y="{ly}" font-size="12" fill="#444" '
+        f'text-anchor="end">accuracy {safe_div(correct, total) * 100:.1f}% '
+        f'({correct}/{total})</text>'
+    )
+    out.append("</svg>")
+    return "\n".join(out)
+
+
+def save_confusion_matrix_svg(matrix: List[List[int]], path: str,
+                              class_names: Optional[Sequence[str]] = None,
+                              **kwargs) -> str:
+    """Write :func:`confusion_matrix_svg` output to ``path``; returns the path.
+
+    >>> save_confusion_matrix_svg(cm, "reports/confusion.svg",
+    ...                           class_names=["setosa", "versicolor"])
+    """
+    svg = confusion_matrix_svg(matrix, class_names=class_names, **kwargs)
+    parent = os.path.dirname(os.path.abspath(path))
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(svg)
+    return path
 
 
 # ---------------------------------------------------------------------------

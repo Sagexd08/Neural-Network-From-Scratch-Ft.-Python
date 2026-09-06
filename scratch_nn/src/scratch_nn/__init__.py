@@ -32,8 +32,8 @@ Where to look
 ``numerical.py``       Finite-difference gradient checking (the correctness proof)
 ``training.py``        The training loop, early stopping, LR schedules
 ``data.py``            CSV loading, splitting, scaling, one-hot encoding
-``metrics.py``         Accuracy, precision, recall, F1, R^2
-``serialization.py``   JSON checkpoints you can read in a text editor
+``metrics.py``         Accuracy, precision, recall, F1, confusion graph, R^2
+``serialization.py``   JSON checkpoints you can read in a text editor (or .pkl)
 """
 
 from .activations import (ACTIVATIONS, ELU, GELU, Activation, Identity, LeakyReLU,
@@ -50,16 +50,19 @@ from .layers import Activation_, BatchNorm, Dense, Dropout, Flatten, Layer, Resi
 from .losses import (LOSSES, BinaryCrossEntropy, CategoricalCrossEntropy, Huber,
                      Loss, MeanAbsoluteError, MeanSquaredError, get_loss)
 from .metrics import (accuracy, classification_report, confusion_matrix,
-                      f1_score, format_confusion_matrix, mean_absolute_error,
+                      confusion_matrix_svg, f1_score,
+                      format_confusion_matrix, mean_absolute_error,
                       mean_squared_error, precision, r_squared, recall,
-                      regression_report, root_mean_squared_error)
+                      regression_report, root_mean_squared_error,
+                      save_confusion_matrix_svg)
 from .model import Model, Sequential
 from .numerical import (GradientCheckResult, check_gradients,
                         check_layer_gradients, gradient_check_report,
                         numerical_gradient, relative_error)
 from .optimizers import (OPTIMIZERS, SGD, AdaGrad, Adam, Momentum, Optimizer,
                          RMSProp, get_optimizer)
-from .serialization import load_model, save_model
+from .serialization import (load_model, load_pickle, save_model,
+                            save_pickle)
 from .tensor import (Tensor, TensorShapeError, arange, eye, from_flat, full,
                      ones, rand, randn, stack_rows, zeros)
 from .training import (Callback, EarlyStopping, History, LearningRateScheduler,
@@ -101,14 +104,15 @@ __all__ = [
     "make_moons", "make_blobs", "make_regression", "xor_dataset",
     # metrics
     "accuracy", "confusion_matrix", "precision", "recall", "f1_score",
-    "classification_report", "format_confusion_matrix", "mean_absolute_error",
+    "classification_report", "format_confusion_matrix",
+    "confusion_matrix_svg", "save_confusion_matrix_svg", "mean_absolute_error",
     "mean_squared_error", "root_mean_squared_error", "r_squared",
     "regression_report",
     # gradient checking
     "check_gradients", "check_layer_gradients", "gradient_check_report",
     "numerical_gradient", "relative_error", "GradientCheckResult",
     # serialization
-    "save_model", "load_model",
+    "save_model", "load_model", "save_pickle", "load_pickle",
     # utils
     "set_seed", "get_rng", "is_finite", "gradient_norm", "parameter_norm",
     "clip_gradient", "ascii_plot", "bar_chart", "progress_bar", "EPS",

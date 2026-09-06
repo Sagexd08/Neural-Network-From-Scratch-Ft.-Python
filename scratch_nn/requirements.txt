@@ -3,7 +3,7 @@
 # Everything - the tensor engine, autodiff-free backpropagation, the
 # optimizers, the plotting - is built on Python's standard library:
 #
-#   math, random, csv, json, os, time, typing, dataclasses,
+#   math, random, csv, json, pickle, os, time, typing, dataclasses,
 #   collections, argparse, unittest
 #
 # Requires Python 3.8 or newer (for the typing syntax used).

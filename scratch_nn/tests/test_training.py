@@ -4,8 +4,10 @@ serialization, and XOR convergence."""
 import json
 import math
 import os
+import pickle
 import tempfile
 import unittest
+import xml.dom.minidom
 
 from scratch_nn.data import (LabelEncoder, MinMaxScaler, StandardScaler,
                              batch_iterator, from_one_hot, load_csv, one_hot,
@@ -13,13 +15,16 @@ from scratch_nn.data import (LabelEncoder, MinMaxScaler, StandardScaler,
                              xor_dataset)
 from scratch_nn.layers import Dense, Dropout
 from scratch_nn.losses import MeanSquaredError
-from scratch_nn.metrics import (accuracy, confusion_matrix, f1_score,
-                                mean_absolute_error, precision, r_squared,
-                                recall, root_mean_squared_error)
+from scratch_nn.metrics import (accuracy, classification_report,
+                                confusion_matrix, confusion_matrix_svg,
+                                f1_score, mean_absolute_error, precision,
+                                r_squared, recall, root_mean_squared_error,
+                                save_confusion_matrix_svg)
 from scratch_nn.model import Sequential
 from scratch_nn.optimizers import (SGD, AdaGrad, Adam, Momentum, RMSProp,
                                    get_optimizer)
-from scratch_nn.serialization import load_model, save_model
+from scratch_nn.serialization import (load_model, load_pickle, save_model,
+                                      save_pickle)
 from scratch_nn.tensor import Tensor
 from scratch_nn.training import (EarlyStopping, LearningRateScheduler,
                                  ModelCheckpoint, cosine_decay, step_decay)
@@ -782,6 +787,218 @@ class TestInference(unittest.TestCase):
         model.compile(loss="categorical_cross_entropy", optimizer=Adam(0.01))
         for row in model.predict_proba([[0.1, 0.2], [1.0, -1.0]]):
             self.assertAlmostEqual(sum(row), 1.0, places=10)
+
+
+class TestF1Score(unittest.TestCase):
+    """F1 is the harmonic mean of precision and recall."""
+
+    def test_perfect_classifier_scores_one(self):
+        self.assertEqual(f1_score([1, 0, 1, 0], [1, 0, 1, 0]), 1.0)
+
+    def test_matches_hand_computed_value(self):
+        # predicted 1s: indices 0,1,2 -> TP=2 (0,2), FP=1 (1)
+        # actual 1s:    indices 0,2,3 -> FN=1 (3)
+        y_pred = [1, 1, 1, 0]
+        y_true = [1, 0, 1, 1]
+        p = 2 / 3
+        r = 2 / 3
+        self.assertAlmostEqual(precision(y_pred, y_true), p, places=12)
+        self.assertAlmostEqual(recall(y_pred, y_true), r, places=12)
+        self.assertAlmostEqual(f1_score(y_pred, y_true),
+                               2 * p * r / (p + r), places=12)
+
+    def test_harmonic_mean_punishes_imbalance(self):
+        # Predicting every sample positive gives recall 1 but poor precision.
+        # The arithmetic mean would flatter it; the harmonic mean must not.
+        y_pred = [1, 1, 1, 1]
+        y_true = [1, 0, 0, 0]
+        self.assertEqual(recall(y_pred, y_true), 1.0)
+        self.assertAlmostEqual(precision(y_pred, y_true), 0.25, places=12)
+        f1 = f1_score(y_pred, y_true)
+        self.assertAlmostEqual(f1, 0.4, places=12)
+        self.assertLess(f1, (1.0 + 0.25) / 2)
+
+    def test_no_predicted_positives_is_zero_not_error(self):
+        self.assertEqual(f1_score([0, 0, 0], [1, 0, 1]), 0.0)
+
+    def test_macro_average_treats_classes_equally(self):
+        # Class 0 is perfect, class 1 is never predicted -> (1 + 0) / 2.
+        y_pred = [0, 0, 0, 0]
+        y_true = [0, 0, 0, 1]
+        self.assertAlmostEqual(f1_score(y_pred, y_true, average="macro"),
+                               (2 * (3 / 4) * 1.0 / ((3 / 4) + 1.0) + 0.0) / 2,
+                               places=12)
+
+    def test_agrees_with_classification_report(self):
+        y_pred = [1, 1, 0, 1, 0, 0]
+        y_true = [1, 0, 0, 1, 1, 0]
+        report = classification_report(y_pred, y_true)
+        self.assertIn(f"{f1_score(y_pred, y_true):.4f}", report)
+
+
+class TestConfusionMatrixSVG(unittest.TestCase):
+    """The confusion graph: an SVG heatmap of the confusion matrix."""
+
+    MATRIX = [[47, 2, 1], [3, 51, 0], [0, 4, 44]]
+
+    def test_output_is_well_formed_xml(self):
+        svg = confusion_matrix_svg(self.MATRIX)
+        xml.dom.minidom.parseString(svg)  # raises on malformed markup
+        self.assertTrue(svg.startswith("<svg"))
+        self.assertTrue(svg.rstrip().endswith("</svg>"))
+
+    def test_every_count_appears_in_the_output(self):
+        svg = confusion_matrix_svg(self.MATRIX, normalize=False)
+        for row in self.MATRIX:
+            for count in row:
+                self.assertIn(f">{count}</text>", svg)
+
+    def test_class_names_are_rendered(self):
+        svg = confusion_matrix_svg([[1, 0], [0, 1]], class_names=["cat", "dog"])
+        self.assertIn("cat", svg)
+        self.assertIn("dog", svg)
+
+    def test_class_names_are_xml_escaped(self):
+        # A name containing markup must not be able to break the document.
+        svg = confusion_matrix_svg([[1, 0], [0, 1]],
+                                   class_names=["<script>", "a&b"])
+        xml.dom.minidom.parseString(svg)
+        self.assertIn("&lt;script&gt;", svg)
+        self.assertIn("a&amp;b", svg)
+        self.assertNotIn("<script>", svg)
+
+    def test_diagonal_and_off_diagonal_use_different_hues(self):
+        # Correct cells are green, errors red, so the two must not collide.
+        svg = confusion_matrix_svg([[10, 0], [0, 10]])
+        other = confusion_matrix_svg([[0, 10], [10, 0]])
+        self.assertNotEqual(svg, other)
+
+    def test_empty_rows_do_not_divide_by_zero(self):
+        svg = confusion_matrix_svg([[0, 0], [0, 0]])
+        xml.dom.minidom.parseString(svg)
+
+    def test_non_square_matrix_is_rejected(self):
+        with self.assertRaises(ValueError):
+            confusion_matrix_svg([[1, 2, 3], [4, 5, 6]])
+        with self.assertRaises(ValueError):
+            confusion_matrix_svg([])
+
+    def test_accepts_output_of_confusion_matrix(self):
+        y_pred = [1, 0, 1, 1, 0]
+        y_true = [1, 0, 0, 1, 0]
+        svg = confusion_matrix_svg(confusion_matrix(y_pred, y_true))
+        xml.dom.minidom.parseString(svg)
+
+    def test_save_writes_a_file_and_creates_directories(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "reports", "cm.svg")
+            returned = save_confusion_matrix_svg(self.MATRIX, path)
+            self.assertEqual(returned, path)
+            self.assertTrue(os.path.exists(path))
+            with open(path, encoding="utf-8") as fh:
+                xml.dom.minidom.parseString(fh.read())
+
+
+class TestPickleSerialization(unittest.TestCase):
+    """.pkl checkpoints carry the same payload as the JSON ones."""
+
+    def _trained_model(self):
+        set_seed(5)
+        X, y = xor_dataset()
+        model = Sequential([Dense(2, 6, activation="tanh"),
+                            Dense(6, 1, activation="sigmoid")])
+        model.compile(loss="binary_cross_entropy", optimizer=Adam(0.05))
+        model.fit(X, y, epochs=100, batch_size=4, verbose=0)
+        return model, X
+
+    def test_predictions_are_identical_after_roundtrip(self):
+        model, X = self._trained_model()
+        before = model.predict(X).data
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "m.pkl")
+            model.save_pickle(path)
+            after = Sequential.load_pickle(path).predict(X).data
+        self.assertEqual(before, after)
+
+    def test_json_and_pickle_agree(self):
+        model, X = self._trained_model()
+        with tempfile.TemporaryDirectory() as tmp:
+            jpath = os.path.join(tmp, "m.json")
+            ppath = os.path.join(tmp, "m.pkl")
+            model.save(jpath)
+            model.save_pickle(ppath)
+            from_json = Sequential.load(jpath).predict(X).data
+            from_pickle = Sequential.load_pickle(ppath).predict(X).data
+        self.assertEqual(from_json, from_pickle)
+
+    def test_payload_is_a_plain_dict_not_a_live_model(self):
+        # Storing the dictionary rather than the object keeps loading routed
+        # through model_from_dict.
+        model, _ = self._trained_model()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "m.pkl")
+            model.save_pickle(path)
+            with open(path, "rb") as fh:
+                payload = pickle.load(fh)
+        self.assertIsInstance(payload, dict)
+        self.assertEqual(payload["format"], "scratch_nn")
+        self.assertIn("weights", payload)
+
+    def test_architecture_is_restored(self):
+        model, _ = self._trained_model()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "m.pkl")
+            model.save_pickle(path)
+            reloaded = Sequential.load_pickle(path)
+        self.assertEqual(len(reloaded.layers), len(model.layers))
+        self.assertEqual(reloaded.layers[0].input_size, 2)
+        self.assertEqual(reloaded.layers[0].activation_name, "tanh")
+
+    def test_creates_parent_directories(self):
+        model, _ = self._trained_model()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "models", "nested", "m.pkl")
+            model.save_pickle(path)
+            self.assertTrue(os.path.exists(path))
+
+    def test_non_finite_weights_are_rejected(self):
+        model = Sequential([Dense(2, 2, activation="relu")])
+        model.layers[0].W.data[0] = float("nan")
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "m.pkl")
+            with self.assertRaises(ValueError):
+                model.save_pickle(path)
+            # A failed save must leave no half-written file behind.
+            self.assertEqual(os.listdir(tmp), [])
+
+    def test_missing_file_raises_file_not_found(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(FileNotFoundError):
+                load_pickle(os.path.join(tmp, "nope.pkl"))
+
+    def test_unreadable_file_raises_value_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "garbage.pkl")
+            with open(path, "wb") as fh:
+                fh.write(b"this is not a pickle")
+            with self.assertRaises(ValueError):
+                load_pickle(path)
+
+    def test_pickle_of_wrong_type_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "wrong.pkl")
+            with open(path, "wb") as fh:
+                pickle.dump([1, 2, 3], fh)
+            with self.assertRaises(ValueError):
+                load_pickle(path)
+
+    def test_metadata_survives_the_roundtrip(self):
+        model, X = self._trained_model()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "m.pkl")
+            save_pickle(model, path, metadata={"note": "xor"})
+            _, extras = load_pickle(path, with_extras=True)
+        self.assertEqual(extras["metadata"]["note"], "xor")
 
 
 if __name__ == "__main__":

@@ -389,6 +389,22 @@ class Sequential:
         from .serialization import load_model
         return load_model(path, **kwargs)
 
+    def save_pickle(self, path: str, **kwargs) -> None:
+        """Write the same payload as :meth:`save`, but as a ``.pkl`` file.
+
+        JSON is the recommended format; use this when ``.pkl`` is what the
+        surrounding tooling expects.  See :mod:`scratch_nn.serialization` for
+        the security trade-off.
+        """
+        from .serialization import save_pickle
+        save_pickle(self, path, **kwargs)
+
+    @classmethod
+    def load_pickle(cls, path: str, **kwargs) -> "Sequential":
+        """Rebuild a model from a ``.pkl`` checkpoint you trust."""
+        from .serialization import load_pickle
+        return load_pickle(path, **kwargs)
+
     # -- display ------------------------------------------------------------
 
     def summary(self) -> str:

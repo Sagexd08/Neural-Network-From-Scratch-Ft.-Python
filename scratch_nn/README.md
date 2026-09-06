@@ -48,7 +48,8 @@ model.predict([[0, 1]])       # -> 0.9998
 15. [Numerical stability](#15-numerical-stability)
 16. [Gradient checking](#16-gradient-checking)
 17. [The training loop](#17-the-training-loop)
-18. [Inference](#18-inference)
+18. [Evaluation — beyond accuracy](#18-evaluation--beyond-accuracy)
+19. [Inference](#19-inference)
 
 **Reference** — [Tracing one example end to end](#tracing-one-example-end-to-end) ·
 [API](#api-reference) · [Testing](#testing) · [Limitations](#known-limitations) ·
@@ -82,11 +83,12 @@ pip install -e .      # only wires up the import path; still pulls in no depende
 python -m scratch_nn xor              # train a network on XOR
 python -m scratch_nn demo             # one sample, every intermediate value
 python -m scratch_nn gradient-check   # prove backpropagation is correct
-python -m scratch_nn test             # run the 281-test suite
+python -m scratch_nn test             # run the 306-test suite
 
 python examples/xor.py                     # XOR, with a decision-boundary plot
 python examples/binary_classification.py   # the full CSV pipeline
 python examples/multiclass_classification.py
+python examples/confusion_graph.py         # confusion matrix, SVG graph, F1
 ```
 
 ## The command-line interface
@@ -118,12 +120,14 @@ scratch_nn/
 │   ├── numerical.py        Finite-difference gradient checking
 │   ├── training.py         Training loop, early stopping, checkpoints, LR schedules
 │   ├── data.py             CSV, splitting, scaling, one-hot encoding
-│   ├── metrics.py          Accuracy, precision, recall, F1, confusion matrix, R²
-│   ├── serialization.py    Human-readable JSON checkpoints
+│   ├── metrics.py          Accuracy, precision, recall, F1, confusion matrix + SVG graph, R²
+│   ├── serialization.py    Human-readable JSON checkpoints (and .pkl export)
 │   ├── utils.py            Seeding, numerical guards, ASCII plotting
 │   └── __main__.py         CLI
-├── examples/               xor.py, binary_classification.py, multiclass_classification.py
-├── tests/                  281 unit tests
+├── examples/               xor.py, binary_classification.py, multiclass_classification.py,
+│                          confusion_graph.py
+├── reports/                generated confusion-matrix graphs
+├── tests/                  306 unit tests
 └── models/                 saved checkpoints
 ```
 
@@ -1058,7 +1062,120 @@ loss over 60 epochs
 Block characters are used when the terminal supports them and ASCII otherwise
 — a Windows cp1252 console cannot encode `█` and would otherwise crash.
 
-## 18. Inference
+## 18. Evaluation — beyond accuracy
+
+Accuracy alone hides the failure that matters. On a dataset that is 99% class
+0, a model that always answers 0 scores **99% accuracy** while being useless.
+The confusion matrix exposes it immediately.
+
+### The confusion matrix
+
+`matrix[actual][predicted]`: rows are ground truth, columns are predictions,
+so the diagonal holds the correct answers and every off-diagonal cell names a
+specific mistake.
+
+```python
+cm = nn.confusion_matrix(model.predict(X_test), y_test)
+print(nn.format_confusion_matrix(cm, class_names=["class A", "class B", "class C"]))
+```
+
+```
+Confusion matrix  (rows = actual, columns = predicted)
+
+                  class A  class B  class C
+actual class A         49        5        6
+actual class B          7       47        6
+actual class C          7       12       41
+```
+
+For the two-class case it also labels the four cells by name:
+
+```
+true negatives      49    false positives      5
+false negatives      7    true positives      47
+```
+
+### The confusion graph
+
+The text grid is exact but hard to *scan* — past a few classes the eye cannot
+tell 118 from 11 at a glance. `confusion_matrix_svg` maps count to colour so
+the shape of the errors is visible immediately:
+
+```python
+nn.save_confusion_matrix_svg(cm, "reports/confusion_matrix.svg",
+                             class_names=["class A", "class B", "class C"])
+```
+
+![Confusion matrix heatmap](reports/confusion_matrix.svg)
+
+It emits **SVG built by string formatting** — no matplotlib, no dependency at
+all, consistent with the rest of the project — and the result opens in any
+browser or editor and embeds directly in a README, as above.
+
+Two design choices make it readable:
+
+- **Colour encodes correctness, intensity encodes magnitude.** Diagonal cells
+  are green, off-diagonal red, so a healthy model reads as a green stripe and
+  any bright red cell names the exact pair of classes being confused.
+- **Intensity is normalised per row, not globally.** Rows are the actual
+  classes, so a row answers "of the true class-*i* examples, where did they
+  go?" — which is recall. Under global normalisation a large class saturates
+  every colour and a rare class stays invisible however badly it is handled.
+
+Each cell shows the count and its row percentage; the footer carries the
+overall accuracy.
+
+### Precision, recall and F1
+
+From the matrix, for each class:
+
+```
+precision = TP / (TP + FP)      "when it says yes, is it right?"
+recall    = TP / (TP + FN)      "of the real yeses, how many did it find?"
+F1        = 2PR / (P + R)       the harmonic mean of the two
+```
+
+Precision and recall trade against each other — predict positive for
+everything and recall hits 1.0 while precision collapses. F1 combines them,
+and the **harmonic** mean is the point: it is dominated by the smaller value,
+so F1 is high only when *both* are high.
+
+| | precision | recall | arithmetic mean | **F1** |
+|---|---|---|---|---|
+| Predicts every sample positive | 0.25 | 1.00 | 0.63 — flattering | **0.40** |
+| Never predicts positive | 0.00 | 0.00 | 0.00 | **0.00** |
+| Balanced classifier | 0.78 | 0.82 | 0.80 | **0.80** |
+
+The arithmetic mean of precision 1.0 and recall 0.0 is a comfortable 0.5; the
+harmonic mean is 0.0, which is the honest answer.
+
+```python
+nn.f1_score(y_pred, y_true)                    # binary, positive class
+nn.f1_score(y_pred, y_true, average="macro")   # multiclass, all classes equally
+```
+
+`classification_report` prints the whole picture at once:
+
+```python
+print(nn.classification_report(preds, y_test, ["class A", "class B", "class C"]))
+```
+
+```
+           precision  recall      f1  support
+---------------------------------------------
+class A       0.7778  0.8167  0.7967       60
+class B       0.7344  0.7833  0.7581       60
+class C       0.7736  0.6833  0.7257       60
+
+macro avg     0.7619  0.7611  0.7602      180
+accuracy                      0.7611      180
+```
+
+Macro-averaging weights every class equally regardless of how many examples it
+has, so a rare class cannot be ignored — exactly the blind spot that plain
+accuracy has.
+
+## 19. Inference
 
 ```python
 model.predict([[0, 1]])           # raw output, dropout off
@@ -1100,6 +1217,43 @@ receives raw units it has never seen.
 `repr(float)` round-trips exactly in Python 3, so reloaded predictions are
 **bit-for-bit identical**, which the test suite asserts with `==` rather than
 a tolerance.
+
+#### Exporting to `.pkl`
+
+When the surrounding tooling expects a pickle, the same checkpoint can be
+written as `.pkl`:
+
+```python
+model.save_pickle("models/model.pkl")
+model = Sequential.load_pickle("models/model.pkl")
+```
+
+Both formats carry **identical information** — `save_pickle` stores the very
+same dictionary `save_model` writes as JSON, so a model saved one way can be
+re-saved the other and the predictions stay bit-for-bit identical:
+
+```python
+Sequential.load("m.json").predict(X) == Sequential.load_pickle("m.pkl").predict(X)
+```
+
+Storing the plain dictionary rather than pickling live objects is deliberate.
+Loading still goes through `model_from_dict`, so a checkpoint cannot smuggle
+in an arbitrary object graph, and the file stays small:
+
+| Format | XOR checkpoint | Readable | Safe to load untrusted |
+|---|---|---|---|
+| `.json` | 4.8 KB | yes — open it in any editor | **yes** |
+| `.pkl` | 1.6 KB | no — opaque bytes | **no** |
+
+> **Security.** `pickle.load` can execute arbitrary code *while unpickling*,
+> before this library ever inspects the result. Load only `.pkl` files you
+> produced yourself or otherwise trust. For anything received from elsewhere,
+> use JSON — it cannot execute anything. JSON remains the recommended default.
+
+Both paths write to a temporary file and rename, so an interrupted save cannot
+destroy a good checkpoint, and both refuse to write a diverged model: NaN or
+infinite weights raise a `ValueError` naming the likely cause rather than
+producing a silently broken file.
 
 ---
 
@@ -1213,6 +1367,13 @@ Dataset(X, y).split(...).standardize().encode_labels()
 # Metrics
 accuracy / precision / recall / f1_score / confusion_matrix
 classification_report / mean_absolute_error / root_mean_squared_error / r_squared
+format_confusion_matrix(matrix, class_names=None)          -> text grid
+confusion_matrix_svg(matrix, class_names=None, ...)        -> SVG string
+save_confusion_matrix_svg(matrix, path, class_names=None)  -> writes .svg
+
+# Saving
+model.save("m.json")          / Sequential.load("m.json")          # recommended
+model.save_pickle("m.pkl")    / Sequential.load_pickle("m.pkl")    # trusted files only
 
 # Callbacks
 EarlyStopping / ModelCheckpoint / LearningRateScheduler
@@ -1230,7 +1391,7 @@ python -m scratch_nn test
 PYTHONPATH=src python -m unittest discover -s tests -t .
 ```
 
-**281 tests, all passing, in under 2 seconds.**
+**306 tests, all passing, in under 2 seconds.**
 
 | File | Covers |
 |---|---|
@@ -1239,7 +1400,7 @@ PYTHONPATH=src python -m unittest discover -s tests -t .
 | `test_losses.py` | every loss against hand-computed values; gradients vs finite differences |
 | `test_layers.py` | forward shapes, the `dW`/`db`/`dX` formulas, dropout scaling, initializer variance |
 | `test_gradients.py` | **numerical gradient checking across 20 architectures** |
-| `test_training.py` | optimizers, XOR convergence, data pipeline, metrics, serialization |
+| `test_training.py` | optimizers, XOR convergence, data pipeline, metrics, F1, confusion graph, JSON + pickle serialization |
 
 Expected values are computed by hand, not captured from the implementation —
 a test that asserts the code matches itself proves nothing. Notable cases:
@@ -1298,7 +1459,7 @@ training · L1, L2, dropout regularization · Early stopping with best-weight
 restore · Model checkpointing · LR schedules · CSV pipeline with leak-free
 preprocessing · Accuracy, precision, recall, F1, confusion matrix, R² ·
 Human-readable JSON serialization · Gradient clipping and NaN guards · CLI ·
-281 unit tests · **XOR solved** · Zero dependencies.
+306 unit tests · **XOR solved** · Zero dependencies.
 
 ## License
 

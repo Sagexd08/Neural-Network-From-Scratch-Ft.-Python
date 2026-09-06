@@ -25,6 +25,25 @@ weights::
 Since the whole point of this project is that nothing is hidden, that
 transparency is worth the file size.
 
+Pickle is offered too
+---------------------
+:func:`save_pickle` / :func:`load_pickle` write the same payload with
+``pickle`` for the cases where a ``.pkl`` file is simply what the surrounding
+tooling expects.  The reasoning above has not changed - JSON remains the
+default and the recommended format - so the pickle path deliberately stores
+the *same plain dictionary* that ``model_to_dict`` produces rather than
+pickling live objects.  Two consequences follow:
+
+* the file stays smaller and faster to load, but no longer human-readable;
+* loading still reconstructs the model through :func:`model_from_dict`, so a
+  checkpoint cannot smuggle in an arbitrary object graph of its own.
+
+That last point narrows, but does not remove, pickle's fundamental hazard:
+``pickle.load`` can execute arbitrary code while unpickling, before this
+module ever inspects what it produced.  **Only load ``.pkl`` checkpoints you
+produced yourself or otherwise trust.**  For anything you received from
+elsewhere, use the JSON format, which cannot execute anything.
+
 What gets stored
 ----------------
 * **architecture** — layer types and their constructor arguments, so the model
@@ -51,6 +70,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import pickle
 import time
 from typing import Any, Dict, List, Optional
 
@@ -59,6 +79,8 @@ from .tensor import Tensor
 __all__ = [
     "save_model",
     "load_model",
+    "save_pickle",
+    "load_pickle",
     "model_to_dict",
     "model_from_dict",
     "save_json",
@@ -281,6 +303,95 @@ def load_model(path: str, compile_model: bool = True, with_extras: bool = False)
             raise ValueError(f"{path} is not valid JSON: {exc}") from None
     model, extras = model_from_dict(payload, compile_model=compile_model)
     return (model, extras) if with_extras else model
+
+
+# ---------------------------------------------------------------------------
+# pickle checkpoints
+# ---------------------------------------------------------------------------
+
+PICKLE_PROTOCOL = 4  # available since Python 3.4; well within the 3.8+ floor
+
+
+def save_pickle(model, path: str, include_optimizer: bool = True,
+                scaler=None, encoder=None,
+                metadata: Optional[Dict[str, Any]] = None,
+                protocol: int = PICKLE_PROTOCOL) -> str:
+    """Write a model to ``path`` as a ``.pkl`` file.
+
+    >>> model.save_pickle("models/xor.pkl")
+
+    The payload is the same dictionary :func:`save_model` writes as JSON, so
+    the two formats carry identical information and a model saved one way can
+    be re-saved the other.  Prefer JSON unless you specifically need ``.pkl``:
+    see the security note in this module's docstring.
+    """
+    payload = model_to_dict(model, include_optimizer=include_optimizer,
+                            scaler=scaler, encoder=encoder, metadata=metadata)
+
+    # A diverged model produces NaN weights.  JSON rejects them outright;
+    # pickle would happily store them and hand back a silently broken model,
+    # so check explicitly to keep the two paths behaving the same way.
+    _reject_non_finite(payload.get("weights", {}))
+
+    parent = os.path.dirname(os.path.abspath(path))
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+
+    # Same write-then-rename dance as save_model: an interrupted save must not
+    # destroy the previous checkpoint.
+    tmp = path + ".tmp"
+    try:
+        with open(tmp, "wb") as fh:
+            pickle.dump(payload, fh, protocol=protocol)
+        os.replace(tmp, path)
+    except Exception:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise
+    return path
+
+
+def load_pickle(path: str, compile_model: bool = True, with_extras: bool = False):
+    """Load a model saved by :func:`save_pickle`.
+
+    >>> model = Sequential.load_pickle("models/xor.pkl")
+
+    Security: unpickling executes code embedded in the file.  Load only
+    checkpoints you trust.
+    """
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"no checkpoint at {path}")
+    with open(path, "rb") as fh:
+        try:
+            payload = pickle.load(fh)
+        except Exception as exc:
+            raise ValueError(
+                f"{path} is not a readable pickle checkpoint: {exc}"
+            ) from None
+    if not isinstance(payload, dict):
+        raise ValueError(
+            f"{path} does not contain a scratch_nn checkpoint "
+            f"(found {type(payload).__name__}, expected dict)"
+        )
+    model, extras = model_from_dict(payload, compile_model=compile_model)
+    return (model, extras) if with_extras else model
+
+
+def _reject_non_finite(weights: Any) -> None:
+    """Raise if any saved weight is NaN or infinite (mirrors JSON's allow_nan)."""
+    stack = [weights]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, dict):
+            stack.extend(item.values())
+        elif isinstance(item, (list, tuple)):
+            stack.extend(item)
+        elif isinstance(item, float) and not math.isfinite(item):
+            raise ValueError(
+                "cannot save: the model contains NaN or infinite values. "
+                "Training likely diverged - lower the learning rate or enable "
+                "gradient clipping."
+            )
 
 
 def save_json(obj: Any, path: str, indent: int = 2) -> None:
